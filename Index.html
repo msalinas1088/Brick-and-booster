@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Brick & Booster Flip Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+
+<style>
+body {
+    font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+    background: #0f172a;
+    color: #f1f5f9;
+    padding: 15px;
+}
+
+h1 { font-size: 22px; }
+
+.card {
+    background: #1e293b;
+    padding: 15px;
+    border-radius: 12px;
+    margin-bottom: 15px;
+}
+
+input, select, button {
+    width: 100%;
+    padding: 10px;
+    margin: 6px 0;
+    border-radius: 8px;
+    border: none;
+}
+
+input, select {
+    background: #334155;
+    color: white;
+}
+
+button {
+    background: #22c55e;
+    color: white;
+    font-weight: bold;
+}
+
+button:hover { opacity: .9; }
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+th {
+    text-align: left;
+    padding: 8px;
+    background: #1e293b;
+}
+
+td {
+    padding: 8px;
+    border-bottom: 1px solid #334155;
+}
+
+.positive { color: #22c55e; }
+.negative { color: #ef4444; }
+
+.summary {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+}
+.summary div {
+    background: #1e293b;
+    padding: 10px;
+    border-radius: 10px;
+    font-size: 12px;
+}
+</style>
+</head>
+<body>
+
+<h1>📊 Brick & Booster Flip Dashboard</h1>
+
+<div class="card">
+<input type="text" id="apiKey" placeholder="TCGAPIs API Key">
+<input type="text" id="setName" placeholder="Set Name (ex: 151)">
+<input type="number" id="minSpread" value="15" placeholder="Min Spread %">
+
+<select id="sortOption">
+    <option value="spread">Sort by Spread</option>
+    <option value="profit">Sort by Profit</option>
+    <option value="market">Sort by Market</option>
+    <option value="name">Sort by Name</option>
+</select>
+
+<button onclick="scanSet()">Scan Set</button>
+<input type="text" id="searchBox" placeholder="🔎 Live Search..." onkeyup="renderTable()">
+</div>
+
+<div class="summary" id="summaryStats"></div>
+
+<div class="card">
+<table>
+<thead>
+<tr>
+<th>Card</th>
+<th>Finish</th>
+<th>Market</th>
+<th>Avg</th>
+<th>Low</th>
+<th>Spread</th>
+<th>Profit</th>
+</tr>
+</thead>
+<tbody id="resultsBody"></tbody>
+</table>
+</div>
+
+<script>
+
+let results = [];
+
+async function getGroupId(apiKey, setName) {
+    const res = await fetch("https://api.tcgapis.com/pokemon/groups",
+        { headers: { "X-Api-Key": apiKey }});
+    const json = await res.json();
+    return json.data.find(g =>
+        g.name.toLowerCase().includes(setName.toLowerCase())
+    )?.groupId;
+}
+
+async function scanSet() {
+
+    const apiKey = apiKey.value;
+    const setName = document.getElementById("setName").value;
+    const minSpread = parseFloat(document.getElementById("minSpread").value);
+
+    const groupId = await getGroupId(apiKey, setName);
+    if(!groupId) { alert("Set not found"); return; }
+
+    document.getElementById("resultsBody").innerHTML =
+        "<tr><td colspan='7'>Loading...</td></tr>";
+
+    const res = await fetch(
+        `https://api.tcgapis.com/pokemon/cards?groupId=${groupId}`,
+        { headers: { "X-Api-Key": apiKey }});
+
+    const json = await res.json();
+
+    results = [];
+
+    json.data.forEach(card => {
+        if(!card.prices) return;
+
+        card.prices.forEach(price => {
+            if(price.condition === "Near Mint" &&
+              ["Holofoil","Reverse Holofoil","Normal"]
+              .includes(price.finish) &&
+              price.marketPrice && price.lowPrice) {
+
+                let spread =
+                  ((price.marketPrice - price.lowPrice)
+                  / price.marketPrice) * 100;
+
+                let profit =
+                  price.marketPrice * 0.87 - 0.30 - price.lowPrice;
+
+                if(spread >= minSpread) {
+                    results.push({
+                        name: card.name,
+                        finish: price.finish,
+                        market: price.marketPrice,
+                        avg: price.midPrice || price.averagePrice || 0,
+                        low: price.lowPrice,
+                        spread,
+                        profit
+                    });
+                }
+            }
+        });
+    });
+
+    sortResults();
+    renderSummary();
+    renderTable();
+}
+
+function sortResults() {
+    const option = document.getElementById("sortOption").value;
+
+    if(option==="spread")
+        results.sort((a,b)=>b.spread-a.spread);
+    if(option==="profit")
+        results.sort((a,b)=>b.profit-a.profit);
+    if(option==="market")
+        results.sort((a,b)=>b.market-a.market);
+    if(option==="name")
+        results.sort((a,b)=>a.name.localeCompare(b.name));
+}
+
+function renderSummary() {
+    if(results.length===0) return;
+
+    const totalProfit =
+        results.reduce((sum,r)=>sum+r.profit,0);
+
+    const avgSpread =
+        results.reduce((sum,r)=>sum+r.spread,0)/results.length;
+
+    const bestProfit =
+        results.reduce((a,b)=>a.profit>b.profit?a:b);
+
+    const bestSpread =
+        results.reduce((a,b)=>a.spread>b.spread?a:b);
+
+    document.getElementById("summaryStats").innerHTML = `
+        <div>Total Cards: ${results.length}</div>
+        <div>Avg Spread: ${avgSpread.toFixed(1)}%</div>
+        <div>Total Profit: $${totalProfit.toFixed(2)}</div>
+        <div>Best Profit: ${bestProfit.name} ($${bestProfit.profit.toFixed(2)})</div>
+        <div>Best Spread: ${bestSpread.name} (${bestSpread.spread.toFixed(1)}%)</div>
+    `;
+}
+
+function renderTable() {
+    const search =
+      document.getElementById("searchBox").value.toLowerCase();
+
+    const body = document.getElementById("resultsBody");
+    body.innerHTML = "";
+
+    results
+      .filter(r=>r.name.toLowerCase().includes(search))
+      .forEach(r=>{
+        body.innerHTML += `
+        <tr>
+            <td>${r.name}</td>
+            <td>${r.finish}</td>
+            <td>$${r.market.toFixed(2)}</td>
+            <td>$${r.avg.toFixed(2)}</td>
+            <td>$${r.low.toFixed(2)}</td>
+            <td class="positive">${r.spread.toFixed(1)}%</td>
+            <td class="${r.profit>0?'positive':'negative'}">
+                $${r.profit.toFixed(2)}
+            </td>
+        </tr>`;
+      });
+}
+
+</script>
+</body>
+</html>
